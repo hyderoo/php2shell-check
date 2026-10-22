@@ -38,5 +38,8 @@ def check_url(url, timeout=10, opener=None):
         return {"target": url, "status": "unknown", "reason": reason, "evidence": evidence}
     # headers do not say who built the binary, so never call it plain vulnerable on a low number
     v = assess(version, distro_build=True)
-    return {"target": url, "status": v.status, "reason": v.reason + " (from response header)",
+    reason = f"header says PHP {'.'.join(map(str, version))}; " + (
+        "that is at or above the fixed release" if v.status == "patched"
+        else "below the fixed release, but a header cannot show a vendor backport. Check on the host")
+    return {"target": url, "status": v.status, "reason": reason,
             "evidence": evidence}

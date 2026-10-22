@@ -4,6 +4,7 @@ import sys
 from . import report
 from .local_mode import run_local
 from .ssh_mode import run_ssh
+from .logscan import scan_file
 from .url_mode import check_url, MAX_URLS
 
 AUTH_HELP = "required: confirm you own this target or are allowed to test it"
@@ -25,6 +26,8 @@ def build_parser():
     s.add_argument("--identity", help="path to a private key file")
     s.add_argument("--known-hosts", help="alternate known_hosts file")
     s.add_argument("--i-am-authorized", action="store_true", help=AUTH_HELP)
+    lg = sub.add_parser("logs", help="scan local web/PHP logs for exploitation signals (weak evidence)")
+    lg.add_argument("files", nargs="+")
     return p
 
 
@@ -36,6 +39,13 @@ def main(argv=None):
     try:
         if args.mode == "local":
             findings = report.inventory_findings(run_local(), "local")
+        elif args.mode == "logs":
+            findings = [h for f in args.files for h in scan_file(f)]
+            if not findings:
+                print("no signals found in the given logs (this does not mean no attack happened)")
+                return 0
+            print(report.to_json(findings) if args.format == "json" else report.to_text(findings))
+            return 3
         elif args.mode == "ssh":
             findings = report.inventory_findings(run_ssh(args.target, args.port, args.identity, args.known_hosts), args.target)
         else:
@@ -43,7 +53,7 @@ def main(argv=None):
                 print(f"at most {MAX_URLS} URLs per run", file=sys.stderr)
                 return 64
             findings = [check_url(u, args.timeout) for u in args.urls]
-    except (ValueError, RuntimeError) as e:
+    except (ValueError, RuntimeError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(report.to_json(findings) if args.format == "json" else report.to_text(findings))
