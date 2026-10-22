@@ -35,7 +35,7 @@ class UbuntuTableTests(unittest.TestCase):
 
 
 def probe_text(os_line, banner, pkg, extra=""):
-    return f"@@host h\n{os_line}\n@@bin /usr/bin/php8.3\n{banner}\n@@pkg {pkg}\n{extra}@@end\n"
+    return f"@@host h\n{os_line}\n@@bin /usr/bin/php8.3\n{banner}\n@@owner {pkg} installed\n@@pkg {pkg}\n{extra}@@end\n"
 
 
 class ProbeDay2Tests(unittest.TestCase):

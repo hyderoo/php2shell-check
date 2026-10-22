@@ -1,5 +1,6 @@
 import argparse
 import sys
+import subprocess
 
 from . import report
 from .local_mode import run_local
@@ -42,7 +43,7 @@ def main(argv=None):
         elif args.mode == "logs":
             findings = [h for f in args.files for h in scan_file(f)]
             if not findings:
-                print("no signals found in the given logs (this does not mean no attack happened)")
+                print(report.to_json([], overall="no-signals") if args.format == "json" else "no signals found in the given logs (this does not mean no attack happened)")
                 return 0
             print(report.to_json(findings) if args.format == "json" else report.to_text(findings))
             return 3
@@ -53,7 +54,7 @@ def main(argv=None):
                 print(f"at most {MAX_URLS} URLs per run", file=sys.stderr)
                 return 64
             findings = [check_url(u, args.timeout) for u in args.urls]
-    except (ValueError, RuntimeError, OSError) as e:
+    except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(report.to_json(findings) if args.format == "json" else report.to_text(findings))

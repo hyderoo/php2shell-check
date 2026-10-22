@@ -9,16 +9,24 @@ from urllib.parse import urlparse
 
 from .versions import parse, assess
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect can leave the target the operator authorized."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 UA = "php2shell-check/0.1 (read-only version check)"
 MAX_URLS = 20
 
 
 def check_url(url, timeout=10, opener=None):
+    if timeout <= 0:
+        raise ValueError("timeout must be positive")
     p = urlparse(url)
     if p.scheme not in ("http", "https") or not p.netloc:
         raise ValueError(f"not an http(s) URL: {url}")
     req = urllib.request.Request(url, method="GET", headers={"User-Agent": UA})
-    open_fn = opener or urllib.request.urlopen
+    open_fn = opener or urllib.request.build_opener(NoRedirect()).open
     try:
         with open_fn(req, timeout=timeout) as r:
             headers, status = dict(r.headers.items()), r.status
@@ -41,5 +49,5 @@ def check_url(url, timeout=10, opener=None):
     reason = f"header says PHP {'.'.join(map(str, version))}; " + (
         "that is at or above the fixed release" if v.status == "patched"
         else "below the fixed release, but a header cannot show a vendor backport. Check on the host")
-    return {"target": url, "status": v.status, "reason": reason,
+    return {"target": url, "status": "review", "reason": reason + "; headers are unverified, check the serving runtime",
             "evidence": evidence}

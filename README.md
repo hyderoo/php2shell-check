@@ -1,72 +1,119 @@
 # php2shell-check
 
-A small read-only checker for the PHP2Shell bugs, CVE-2026-109618 and CVE-2026-109619.
-Both are unauthenticated RCEs in the PHP runtime itself, so the question that matters is
-"which PHP is actually serving requests, and is it patched?" This tool answers that in
-three ways. Python 3.9+, standard library only.
+Check PHP runtime versions against the PHP2Shell fixes
+([CVE-2026-109618 and CVE-2026-109619](https://securitylabs.datadoghq.com/articles/php2shell-critical-vulnerabilities-in-php/)).
+Python 3.9 or newer, no third-party dependencies. Linux/POSIX host inventory.
 
-This is a defensive version check. It contains no exploit code and sends no attack traffic.
-Run `url` and `ssh` only against systems you own or are allowed to test.
+This is a version and inventory checker, not an exploit or a webshell detector.
+It does not prove a website is safe. Use remote modes only on systems you own
+or have permission to inspect.
 
-Fixed upstream releases: **8.2.35, 8.3.36, 8.4.27, 8.5.12**. PHP 8.1 and older get no
-upstream release. Patching is the real fix; config flags only reduce exposure.
+## Quick start
 
-## Run it
+Clone the repo and run from its directory:
 
-```
-python -m php2shell_check local
-python -m php2shell_check url https://example.com https://example.com/app/ --i-am-authorized
-python -m php2shell_check ssh deploy@host --identity ~/.ssh/id_ed25519 --i-am-authorized
-python -m php2shell_check logs /var/log/apache2/error.log /var/log/php8.3-fpm.log
-python -m php2shell_check --format json local
+```sh
+git clone https://github.com/hyderoo/php2shell-check.git
+cd php2shell-check
+python3 -m php2shell_check local
 ```
 
-| Mode | What it does |
-|------|--------------|
-| `local` | Finds `php`, `php-fpm`, `php-cgi` in PATH and common dirs, reads `-v`, three ini values, installed php packages, the OS, running containers, and shells spawned by web workers. |
-| `url` | One plain GET per URL. Reads `X-Powered-By` / `Server`. No POST, no payloads, max 20 URLs. |
-| `ssh` | Pipes the same inventory script to `sh -s` on the host. `StrictHostKeyChecking=yes` and `BatchMode`, so the host must already be in `known_hosts` and auth is your key or agent. It never takes a password. |
-| `logs` | Greps local log files for the weak signals Datadog describes: memory exhaustion at "Unknown on line 0", worker segfaults, `PHP_SESSION_UPLOAD_PROGRESS` in request text. |
+Other modes:
 
-`url` and `ssh` refuse to run without `--i-am-authorized`. Only point them at things you own
-or have permission to check. Everything it runs on a host is a version query, `ps`, `docker ps`
-and package listing. It writes nothing.
+```sh
+# Header hint only. A version header never earns a "patched" verdict.
+python3 -m php2shell_check url https://example.com --i-am-authorized
 
-Exit codes: `0` patched / nothing found, `2` unknown, `3` needs review, `4` vulnerable, `64` bad usage, `1` error.
+# Inventory a host using your SSH key or agent.
+python3 -m php2shell_check ssh deploy@host --identity ~/.ssh/id_ed25519 --i-am-authorized
 
-## Reading the result
+# Search local logs for weak signals, not proof of exploitation.
+python3 -m php2shell_check logs /var/log/apache2/error.log /var/log/php8.3-fpm.log
 
-- `vulnerable`: a plain upstream build below the fixed release, or an Ubuntu package below Canonical's fixed version.
-- `review`: a distro package below the upstream number on a distro we have no cited table for
-  (vendors backport fixes without bumping the version), an end-of-life branch, a version read from an HTTP header,
-  a running container, a shell under a web worker, or a log hit. Look at it by hand.
-- `unknown`: nothing to judge. Not a clean bill of health.
-- `patched`: at or above the fixed release. Restart your workers, a running old process stays vulnerable.
-- `note`: config observations (`session.upload_progress.enabled`, `fatal_error_backtraces`, `memory_limit`).
-  These never change the verdict. Only patching fixes the bugs.
+# Put the output option before the mode.
+python3 -m php2shell_check --format json local
+```
 
-Distro fix versions are only built in for Ubuntu, from
+SSH requires the host key already in `known_hosts`. It uses strict host-key
+checking and non-interactive authentication. Add `--known-hosts PATH` for a
+separate file. No password prompt is provided.
+
+## What gets checked
+
+| Mode | Reads | Does not establish |
+| --- | --- | --- |
+| `local` | PHP binaries in PATH/common directories, versions, CLI ini values, installed packages, running container names and worker child shells | Which runtime serves HTTP, whether workers restarted, or what is inside each container |
+| `ssh` | The same inventory, sent to `sh -s` over SSH | Anything outside that host's visibility |
+| `url` | `X-Powered-By` and `Server` from one GET per URL, at most 20 URLs | A trusted runtime version, vendor backports, or patch state. Redirects are not followed |
+| `logs` | Memory exhaustion at `Unknown on line 0`, segfault text and `PHP_SESSION_UPLOAD_PROGRESS` | That an attack happened, or that no attack happened when nothing matches |
+
+The probe does not intentionally change files or settings. It runs local PHP
+binaries to read their version/configuration; it is not a sandbox for untrusted
+executables. Normal network and SSH access logs can still be written by services.
+Log evidence and process arguments can contain sensitive data. Review output
+before sharing it.
+
+## Interpreting results
+
+Upstream fixes: **8.2.35, 8.3.36, 8.4.27, 8.5.12**.
+PHP 8.1 and older have no new upstream release for these fixes. Source backports
+exist for 7.4, 8.0 and 8.1; check your vendor or move to a supported branch.
+
+| Result | Meaning |
+| --- | --- |
+| `patched` | An inspected binary meets the upstream threshold, or its owning Ubuntu package meets Canonical's fixed version. Not a site-wide verdict |
+| `vulnerable` | An inspected upstream build or verified Ubuntu package is below its fixed version |
+| `review` | Header-only evidence, a possible vendor backport, an unsupported branch, a container not inspected, an installed Apache module, or a weak log/process signal |
+| `unknown` | Not enough evidence to judge |
+| `error` | A check failed or the inventory was incomplete |
+| `note` | Configuration/context only. Does not change the verdict |
+
+Exit codes: `0` patched (or no log signals), `1` error, `2` unknown,
+`3` review, `4` vulnerable. Missing remote authorization or too many URLs returns
+`64`; argparse syntax errors return `2`. For JSON log scans with no hits,
+`overall` is `no-signals`, never `patched`.
+
+When several findings exist, vulnerable/review findings take priority over
+errors, then unknown, then patched. Check individual findings too.
+
+## Vendor packages and blind spots
+
+Ubuntu's fixed-package table covers 14.04 through 26.10, using
 [Canonical's advisory](https://ubuntu.com/blog/php2shell-vulnerability-fixes-available).
-Ubuntu packages from a PPA (Sury, Ondrej) are not judged by that table. Debian, RHEL, Alpine and others stay `review`
-until a cited source is added to `php2shell_check/distro.py`.
+The probe checks which installed package owns a binary before applying that
+table. Sury/Ondrej/Remi builds are excluded. Other package origins cannot be
+proved from version text alone; inspect repository provenance when in doubt.
+Debian, RHEL and Alpine have no built-in fixed-package table.
 
-## Limits
+Apache `mod_php` packages get a review finding. The tool does not inspect the
+loaded module. Bundled runtimes, FrankenPHP, LiteSpeed and nested vendor
+installation directories may be missed. Run it inside each container and check
+the actual serving runtime separately. Config notes come from CLI PHP and can
+differ from FPM or Apache configuration.
 
-- URL mode only sees what headers expose. Most hardened sites hide the version, so `unknown` is the common answer, and it never means safe.
-- It reports the binaries it finds. It cannot tell which one your web server runs. Containers are listed, not
-  looked into: run the tool inside each one. Bundled interpreters (FrankenPHP, Docker images without `php` in PATH) can be missed.
-- The log scan and the worker-shell check are weak signals. Legitimate apps run shells and hit memory limits.
-  No hit does not mean no attack, since the exploit does not need to crash a worker.
-- It does not look for dropped webshells and does not try the exploit, by design.
-- Tested live over SSH against a local sshd and against a local HTTP server. Not tested against real Debian, RHEL or Alpine hosts.
+Restart or replace PHP workers after patching. A new binary on disk says
+nothing about an old process still running. Configuration workarounds are not
+a substitute for patching. Log and process checks are snapshots and have false
+positives and false negatives.
 
-## Develop
+## Tests
 
+```sh
+python3 -m unittest discover -s tests -v
 ```
-python -m unittest discover -s tests
-```
 
-Sources for the fixed versions and detection signals:
-[Datadog Security Labs](https://securitylabs.datadoghq.com/articles/php2shell-critical-vulnerabilities-in-php/),
-[Vercel bulletin](https://vercel.com/kb/bulletin/php2shell-security-bulletin),
-[PHP 8.5.12 release](https://www.php.net/releases/8_5_12.php).
+Tests cover version boundaries, Ubuntu ownership and backports, command
+construction, probe parsing, failure handling, JSON output and loopback HTTP
+redirect behavior. CI runs Python 3.9 and 3.12 on Linux.
+
+The original implementation was exercised against a local sshd and local HTTP
+server. The audit used controlled fixtures and loopback HTTP, not an arbitrary
+public website. No real PHP/FPM, Docker/Podman, Debian/RHEL/Alpine deployment or
+production log corpus has been validated end to end. Passing tests are not a
+claim of complete vulnerability coverage.
+
+## Sources
+
+- [PHP release announcement](https://www.php.net/releases/8_5_12.php)
+- [Datadog: versions, mitigations and detection limits](https://securitylabs.datadoghq.com/articles/php2shell-critical-vulnerabilities-in-php/)
+- [Ubuntu: fixed package versions](https://ubuntu.com/blog/php2shell-vulnerability-fixes-available)

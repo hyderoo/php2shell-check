@@ -25,6 +25,14 @@ for dir in $(echo "$PATH" | tr ':' ' ') /usr/local/bin /usr/sbin /opt/remi /opt/
     case " $seen " in *" $real "*) continue;; esac
     seen="$seen $real"
     echo "@@bin $real"
+    if command -v dpkg-query >/dev/null 2>&1; then
+      dpkg-query -S "$real" 2>/dev/null | while IFS= read -r owner; do
+        pkg=${owner%%: /*}
+        dpkg-query -W -f='@@owner ${Package} ${Version} ${db:Status-Status}\n' "$pkg" 2>/dev/null
+      done
+    elif command -v rpm >/dev/null 2>&1; then
+      rpm -qf --qf '@@owner %{NAME} %{VERSION}-%{RELEASE} installed\n' "$real" 2>/dev/null
+    fi
     "$real" -v 2>/dev/null | head -n 1
     case "$real" in
       *fpm*|*cgi*) ;;
@@ -35,9 +43,9 @@ for dir in $(echo "$PATH" | tr ':' ' ') /usr/local/bin /usr/sbin /opt/remi /opt/
   done
 done
 if command -v dpkg-query >/dev/null 2>&1; then
-  dpkg-query -W -f='@@pkg ${Package} ${Version}\n' 'php*' 2>/dev/null | grep -v 'no packages'
+  dpkg-query -W -f='${db:Status-Status} @@pkg ${Package} ${Version}\n' 'php*' 'libapache2-mod-php*' 2>/dev/null | sed -n 's/^installed //p'
 elif command -v rpm >/dev/null 2>&1; then
-  rpm -qa 'php*' 2>/dev/null | sed 's/^/@@pkg /'
+  rpm -qa 'php*' 'libapache2-mod-php*' 2>/dev/null | sed 's/^/@@pkg /'
 fi
 for rt in docker podman; do
   if command -v $rt >/dev/null 2>&1; then
@@ -61,6 +69,7 @@ class Runtime:
     ini: dict = field(default_factory=dict)
     verdict: Verdict = None
     distro: bool = False
+    owners: list = field(default_factory=list)
 
 
 @dataclass
@@ -84,6 +93,10 @@ def parse_probe(output):
         elif line.startswith("@@bin "):
             cur = Runtime(path=line[6:].strip())
             inv.runtimes.append(cur)
+        elif line.startswith("@@owner ") and cur:
+            parts = line[8:].split()
+            if len(parts) == 3 and parts[2] == "installed":
+                cur.owners.append((parts[0], parts[1]))
         elif line.startswith("@@ini ") and cur:
             k, _, v = line[6:].partition("=")
             cur.ini[k.strip()] = v.strip()
@@ -102,20 +115,15 @@ def parse_probe(output):
             inv.complete = True
         elif cur and not cur.banner and line.strip():
             cur.banner = line.strip()
-    pkg_text = " ".join(inv.packages).lower()
-    has_distro_pkgs = bool(inv.packages)
     for rt in inv.runtimes:
         rt.version = parse(rt.banner)
-        # a package manager owning php, or Ubuntu/Debian style banner => treat as distro build
-        rt.distro = has_distro_pkgs and (
-            rt.path.startswith(("/usr/bin", "/usr/sbin")) or re.search(r"ubuntu|debian|el\d|fc\d", rt.banner.lower()) is not None
-        )
+        # Package presence alone does not establish who built this binary.
+        rt.distro = bool(rt.owners) or bool(re.search(r"ubuntu|debian|el\d|fc\d", rt.banner.lower()))
         rt.verdict = assess(rt.version, distro_build=rt.distro)
-        if rt.distro and rt.version and inv.os[0] == "ubuntu":
+        if rt.owners and rt.version and inv.os[0] == "ubuntu":
             branch = f"{rt.version[0]}.{rt.version[1]}"
-            base = f"php{branch}"
-            vers = [p.split(None, 1)[1] for p in inv.packages
-                    if p.startswith(base) and len(p.split(None, 1)) == 2]
+            base = "php5" if rt.version[0] == 5 else f"php{branch}"
+            vers = [v for name, v in rt.owners if name == base or name.startswith(base + "-")]
             hit = ubuntu_verdict(inv.os[1], branch, vers)
             if hit:
                 rt.verdict = Verdict(*hit)

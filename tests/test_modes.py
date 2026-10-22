@@ -18,6 +18,7 @@ class FakeResp:
 SAMPLE = """@@host web1
 @@bin /usr/bin/php8.3
 PHP 8.3.6 (cli) (built: Jan  1 2026) (NTS)
+@@owner php8.3-cli 8.3.6-0ubuntu0.24.04.13 installed
 @@ini upload_progress=1
 @@ini memory_limit=128M
 @@bin /usr/local/bin/php
@@ -55,7 +56,7 @@ class UrlTests(unittest.TestCase):
 
     def test_patched_header(self):
         op = lambda req, timeout: FakeResp({"X-Powered-By": "PHP/8.4.27"})
-        self.assertEqual(check_url("https://example.test/", opener=op)["status"], "patched")
+        self.assertEqual(check_url("https://example.test/", opener=op)["status"], "review")
 
     def test_get_only_and_bad_scheme(self):
         seen = {}
