@@ -5,6 +5,9 @@ Both are unauthenticated RCEs in the PHP runtime itself, so the question that ma
 "which PHP is actually serving requests, and is it patched?" This tool answers that in
 three ways. Python 3.9+, standard library only.
 
+This is a defensive version check. It contains no exploit code and sends no attack traffic.
+Run `url` and `ssh` only against systems you own or are allowed to test.
+
 Fixed upstream releases: **8.2.35, 8.3.36, 8.4.27, 8.5.12**. PHP 8.1 and older get no
 upstream release. Patching is the real fix; config flags only reduce exposure.
 
